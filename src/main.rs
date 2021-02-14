@@ -8,11 +8,13 @@ use crate::map::Map;
 use crate::output::Output;
 use atty::Stream;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::stdin;
 use std::{borrow::Cow, path::PathBuf};
 use structopt::StructOpt;
 use vcd::{Command, IdCode, Var};
+use itertools::Itertools; // 0.8.0
 
 fn to_bitstring(vals: &[vcd::Value], x_value: char, z_value: char) -> String {
     let mut res = String::new();
@@ -44,6 +46,15 @@ pub struct Opts {
     /// Use pretty output
     #[structopt(long)]
     pub pretty: bool,
+    // extract and print hierarchical structure
+    #[structopt(long)]
+    pub structure: bool,
+    // extract values (requires structure)
+    #[structopt(long)]
+    pub values: bool,
+    // extract flat variable names
+    #[structopt(long)]
+    pub flat_vars: bool,
 }
 
 pub trait ValueType: Serialize + Clone {
@@ -127,7 +138,11 @@ fn process<V: ValueType>(opts: Opts) -> Result<(), Error> {
             let content = File::open(f)?;
             let mut parser = vcd::Parser::new(content);
             let header = parser.parse_header()?;
-            let commands = parser.collect::<Vec<_>>();
+            let commands = if opts.values {
+                parser.collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             (header, commands)
         }
         None => {
@@ -172,16 +187,28 @@ fn process<V: ValueType>(opts: Opts) -> Result<(), Error> {
 
     let Map { items, paths } = map;
 
+    let mut hm = HashMap::new();
+
     for (path, var) in paths {
-        output.insert(path, &items.get(&var.code).unwrap().values);
+        output.insert(path.clone(), &items.get(&var.code).unwrap().values);
+        let x:String = path.to_vec().into_iter().cloned().intersperse(".".to_owned()).collect();
+        hm.insert(x, var.size);
     }
-    if opts.pretty || atty::is(Stream::Stdout) {
-        let s = serde_json::to_string_pretty(&output)?;
-        println!("{}", s);
-    } else {
-        let s = serde_json::to_string(&output)?;
-        println!("{}", s);
+
+    if opts.structure {
+        if opts.pretty || atty::is(Stream::Stdout) {
+            let s = serde_json::to_string_pretty(&output)?;
+            println!("{}", s);
+        } else {
+            let s = serde_json::to_string(&output)?;
+            println!("{}", s);
+        }
     }
+    if opts.flat_vars {
+            let s = serde_json::to_string_pretty(&hm)?;
+            println!("{}",s);
+    }
+
     Ok(())
 }
 
